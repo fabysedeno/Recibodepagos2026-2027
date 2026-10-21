@@ -17,7 +17,7 @@
 //
 //  Si apiUrl se deja vacío, la app corre en "modo de demostración" (solo en este navegador).
 window.KORU_CONFIG = {
-  apiUrl: 'https://script.google.com/macros/s/AKfycbwJxcyA9ysV2z72zrEjHSnthHaVOIOVXHFsaN1xC8Zj36YDL35YdFAq28bJKqAm4d4RMg/exec',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbxdbVv269WLyikLWoQJaUsWceLhtqGbjmqcCbP0PGbdOGA1ev5eZJTe77R3DO5JDMu5fA/exec',
   parentKey: ''
 };
 
@@ -113,7 +113,14 @@ window.KORU_CONFIG = {
     logout() { guardarSesion(''); cache.clear(); enVuelo.clear(); },
     haySesion() { return !!leerSesion(); },
     async buzonLeer() { const d = await conSesion({ op: 'buzon_leer' }, { timeout: 60000 }); return d.items || []; },
-    async buzonConfirmar(ids) { if (ids && ids.length) await conSesion({ op: 'buzon_confirmar', ids }); }
+    async buzonConfirmar(ids) { if (ids && ids.length) await conSesion({ op: 'buzon_confirmar', ids }); },
+    /** Lista pública de grupos del formulario (la define Operaciones). null si aún no hay. */
+    async grupos() {
+      const d = await llamar({ op: 'grupos' }, { timeout: 20000 });
+      try { return d.value ? JSON.parse(d.value) : null; } catch (e) { return null; }
+    },
+    async hojaInfo() { return conSesion({ op: 'hoja_info' }, { timeout: 60000 }); },
+    async hojaVolcar(tabs) { return conSesion({ op: 'hoja_volcar', tabs }, { timeout: 120000 }); }
   };
   const almacenNube = {
     async get(key) {
@@ -167,7 +174,10 @@ window.KORU_CONFIG = {
       }
       return out.sort((a, b) => (a.id < b.id ? -1 : 1));
     },
-    async buzonConfirmar(ids) { (ids || []).forEach(id => localStorage.removeItem(LS + id)); }
+    async buzonConfirmar(ids) { (ids || []).forEach(id => localStorage.removeItem(LS + id)); },
+    async grupos() { try { const v = localStorage.getItem(LS + 'koru-cfg::grupos'); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
+    async hojaInfo() { const e = new Error('Google Sheets solo está disponible con el servidor de Apps Script (modo demostración activo).'); throw e; },
+    async hojaVolcar() { const e = new Error('Google Sheets solo está disponible con el servidor de Apps Script (modo demostración activo).'); throw e; }
   };
   const almacenLocal = {
     async get(key) { const v = localStorage.getItem(LS + key); return v === null ? null : { key, value: v }; },
@@ -474,7 +484,21 @@ window.KORU_CONFIG = {
   .btn-next:hover, .btn-submit:hover, .btn-start:hover{ background:var(--forest-dark); }
   .btn-prev{ flex:1; padding:12px; border:none; border-radius:8px; font-size:1rem; font-weight:700; cursor:pointer; background:var(--gold-soft); color:var(--forest-dark); }
   .btn-prev:hover{ background:#e8dcb4; }
+  .solo-equipo{ display:none; }
+  body.modo-equipo .solo-equipo{ display:block; }
+  body.modo-equipo .solo-alumno{ display:none !important; }
+  .btn-sec{ display:block; width:100%; margin-top:10px; background:#fff; color:var(--forest-dark); border:1.5px solid var(--forest-dark); padding:13px; border-radius:12px; font-size:15px; font-weight:700; cursor:pointer; }
   .success-screen{ text-align:center; display:none; }
+  .cfg-quick{ border:0; background:var(--forest-dark,#3D4009); color:#fff; padding:8px 14px; border-radius:999px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .cfg-quick.active{ box-shadow:0 0 0 3px rgba(122,138,58,.35); }
+  .gr-row{ display:grid; grid-template-columns:minmax(120px,1.2fr) minmax(120px,1.6fr) auto auto; gap:8px; align-items:center; margin-bottom:8px; }
+  .gr-row input[type=text]{ width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  .gr-row label.eq{ display:flex; align-items:center; gap:5px; font-size:12px; white-space:nowrap; }
+  .cfg-card{ margin-bottom:16px; }
+  a.pill{ text-decoration:none; display:inline-block; }
+  a.pill.solid{ color:#fff; }
+  .cfg-shortcuts{ display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+  @media(max-width:640px){ .gr-row{ grid-template-columns:1fr 1fr; } }
   .success-screen.active{ display:block; }
   .success-icon{ font-size:2.6rem; color:var(--forest); margin-bottom:14px; }
 
@@ -754,28 +778,36 @@ window.KORU_CONFIG = {
   <div class="form-screen" id="form-container">
     <div class="f-header">
       <h1>Proyecto Social Koru</h1>
-      <p>Carpeta Integral del Aprendiz</p>
+      <p data-eq="Carpeta Integral · Equipo Koru">Carpeta Integral del Aprendiz</p>
     </div>
     <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
     <div class="form-banner" id="form-banner"></div>
 
     <form id="emergencyForm" onsubmit="return false;">
       <div class="step active" id="step-1">
-        <div class="form-group"><label for="nombre">Nombre(s) del Aprendiz</label><input type="text" id="nombre" placeholder="Ej. Sofía"></div>
+        <div class="form-group"><label for="nombre" data-eq="Nombre(s)">Nombre(s) del Aprendiz</label><input type="text" id="nombre" placeholder="Ej. Sofía"></div>
         <div class="form-group"><label for="apellidos">Apellidos</label><input type="text" id="apellidos" placeholder="Ej. Martínez García"></div>
         <div class="form-group"><label for="curp">CURP / Documento de Identidad</label><input type="text" id="curp" placeholder="18 caracteres" maxlength="18" style="text-transform:uppercase;"></div>
         <div class="form-group"><label for="fechaNacimiento">Fecha de Nacimiento Completa</label><input type="date" id="fechaNacimiento"></div>
         <div class="form-group">
-          <label for="grupo">Grupo / Grado</label>
-          <select id="grupo">
+          <label for="grupo" data-eq="Grupo">Grupo / Grado</label>
+          <select id="grupo" onchange="aplicarModoEquipo()">
             <option value="" disabled selected>Selecciona una opción</option>
-            <option value="Esporas">Esporas (3 a 6 años)</option>
-            <option value="Grupo Koru">Grupo Koru (6 a 7.10)</option>
-            <option value="Helechos 1">Helechos 1 (7.10 a 9.10)</option>
-            <option value="Helechos 2">Helechos 2 (9.10 a 12)</option>
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group solo-equipo">
+          <label for="puesto">Puesto</label>
+          <input type="text" id="puesto" placeholder="Ej. Maestra de Esporas">
+        </div>
+        <div class="form-group solo-equipo">
+          <label for="area">Área</label>
+          <select id="area"><option value="">Selecciona…</option><option>Docencia</option><option>Asistencia</option><option>Dirección</option><option>Administración / Operaciones</option><option>Mantenimiento</option><option>Limpieza</option><option>Otro</option></select>
+        </div>
+        <div class="form-group solo-equipo">
+          <label for="telefono">Tu teléfono</label>
+          <input type="tel" id="telefono" placeholder="10 dígitos">
+        </div>
+        <div class="form-group solo-alumno">
           <label for="hermanos">¿Tiene hermanos o hermanas en Koru?</label>
           <textarea id="hermanos" rows="2" placeholder="Escribe su nombre completo, uno por línea. Si no tiene, déjalo vacío."></textarea>
           <span class="field-hint">Esto nos permite entregarles un solo juego de documentos por familia.</span>
@@ -825,13 +857,13 @@ window.KORU_CONFIG = {
 
       <div class="step" id="step-4">
         <fieldset>
-          <legend>Contacto Principal (1)</legend>
+          <legend data-eq="Contacto de emergencia (1)">Contacto Principal (1)</legend>
           <div class="form-group" style="margin-bottom:8px;"><input type="text" id="tutor1Nombre" placeholder="Nombre completo"></div>
           <div class="form-group" style="margin-bottom:8px;"><input type="text" id="tutor1Parentesco" placeholder="Parentesco (Madre, Padre, Tutor)"></div>
           <div class="form-group" style="margin-bottom:0;"><input type="tel" id="tutor1Tel" placeholder="Teléfono 10 dígitos"></div>
         </fieldset>
         <fieldset>
-          <legend>Contacto Secundario (2)</legend>
+          <legend data-eq="Contacto de emergencia (2)">Contacto Secundario (2)</legend>
           <div class="form-group" style="margin-bottom:8px;"><input type="text" id="tutor2Nombre" placeholder="Nombre completo"></div>
           <div class="form-group" style="margin-bottom:8px;"><input type="text" id="tutor2Parentesco" placeholder="Parentesco (Tío, Abuelo, etc.)"></div>
           <div class="form-group" style="margin-bottom:0;"><input type="tel" id="tutor2Tel" placeholder="Teléfono 10 dígitos"></div>
@@ -843,7 +875,7 @@ window.KORU_CONFIG = {
       </div>
 
       <div class="step" id="step-5">
-        <div class="form-group">
+        <div class="form-group solo-alumno">
           <label for="autorizadosRetiro">Personas autorizadas adicionales para recoger al aprendiz</label>
           <textarea id="autorizadosRetiro" rows="3" placeholder="Además de los padres, anota nombres completos y parentesco de quienes pueden recoger al aprendiz..."></textarea>
         </div>
@@ -865,6 +897,13 @@ window.KORU_CONFIG = {
     <h2 style="color:var(--forest-dark); margin-bottom:8px;">¡Expediente Registrado!</h2>
     <p style="color:var(--ink-soft); font-size:.9rem; margin-bottom:16px;">La escuela recibió tu información correctamente. ¡Gracias!</p>
     <button type="button" class="btn-start" onclick="resetForm()">Llenar otro formulario</button>
+    <button type="button" class="btn-sec" onclick="finalizarFormulario()">Finalizar</button>
+  </div>
+  <div class="success-screen" id="finScreen">
+    <div class="success-icon">🌿</div>
+    <h2 style="color:var(--forest-dark); margin-bottom:8px;">¡Gracias por tu tiempo!</h2>
+    <p style="color:var(--ink-soft); font-size:.9rem; margin-bottom:16px;">Tu información quedó guardada. Ya puedes cerrar esta ventana.</p>
+    <button type="button" class="btn-sec" onclick="resetForm()">Volver al inicio</button>
   </div>
 </div>
 </div>
@@ -1059,6 +1098,53 @@ function prevStep(step){
   updateProgress(currentStep);
 }
 
+const GRUPOS_DEFECTO = [
+  {nombre:'Esporas', detalle:'3 a 6 años'},
+  {nombre:'Grupo Koru', detalle:'6 a 7.10'},
+  {nombre:'Helechos 1', detalle:'7.10 a 9.10'},
+  {nombre:'Helechos 2', detalle:'9.10 a 12'},
+  {nombre:'Equipo Koru', detalle:'Personal de la escuela', equipo:true}
+];
+let gruposForm = GRUPOS_DEFECTO.slice();
+function limpiarGrupos(arr){
+  if(!Array.isArray(arr)) return null;
+  const out = arr.filter(g => g && typeof g.nombre === 'string' && g.nombre.trim())
+    .map(g => ({ nombre:g.nombre.trim().slice(0,60), detalle:String(g.detalle||'').trim().slice(0,60), equipo:!!g.equipo }));
+  return out.length ? out : null;
+}
+function esGrupoEquipo(nombre){ const g = gruposForm.find(x=>x.nombre===nombre); return !!(g && g.equipo); }
+function pintarGruposForm(){
+  const sel = document.getElementById('grupo'); if(!sel) return;
+  const actual = sel.value;
+  sel.innerHTML = '<option value="" disabled selected>Selecciona una opción</option>' +
+    gruposForm.map(g => `<option value="${escapeHtml(g.nombre)}">${escapeHtml(g.nombre)}${g.detalle?' ('+escapeHtml(g.detalle)+')':''}</option>`).join('');
+  if(actual && gruposForm.some(g=>g.nombre===actual)) sel.value = actual;
+  aplicarModoEquipo();
+}
+/* Si el grupo elegido es de tipo «equipo» (Equipo Koru) el formulario se adapta: sin hermanos ni personas autorizadas, con puesto/área/teléfono. */
+function aplicarModoEquipo(){
+  const sel = document.getElementById('grupo');
+  const eq = !!sel && esGrupoEquipo(sel.value);
+  document.body.classList.toggle('modo-equipo', eq);
+  document.querySelectorAll('[data-eq]').forEach(el=>{
+    if(el.dataset.al === undefined) el.dataset.al = el.textContent;
+    el.textContent = eq ? el.dataset.eq : el.dataset.al;
+  });
+}
+async function cargarGruposFormulario(){
+  try{
+    const g = limpiarGrupos(await window.koru.grupos());
+    if(g){ gruposForm = g; pintarGruposForm(); }
+  }catch(e){ /* sin red: se quedan los grupos por defecto */ }
+}
+function finalizarFormulario(){
+  try{ document.getElementById('emergencyForm').reset(); }catch(e){}
+  aplicarModoEquipo();
+  document.getElementById('successScreen').classList.remove('active');
+  document.getElementById('finScreen').classList.add('active');
+  try{ window.close(); }catch(e){}   // si el navegador no permite cerrar, queda la pantalla de gracias
+}
+
 function inicializarFormularioExpediente(){
   const form = document.getElementById('emergencyForm');
   if(!form){
@@ -1067,6 +1153,8 @@ function inicializarFormularioExpediente(){
   }
   const paso = document.getElementById('paso-envio');
   if(paso) paso.textContent = 'Listo para enviar.';
+  pintarGruposForm();
+  cargarGruposFormulario();
 }
 if(document.readyState === 'loading'){
   document.addEventListener('DOMContentLoaded', inicializarFormularioExpediente);
@@ -1111,6 +1199,15 @@ function enviarExpediente(){
       hermanos: document.getElementById('hermanos').value,
       tutor1Tel: document.getElementById('tutor1Tel').value
     };
+    if(esGrupoEquipo(formData.grupo)){
+      formData.tipo = 'equipo';
+      formData.puesto = document.getElementById('puesto').value;
+      formData.area = document.getElementById('area').value;
+      formData.telefono = document.getElementById('telefono').value;
+      formData.hermanos = ''; formData.autorizadosRetiro = '';
+    }else{
+      formData.tipo = 'alumno';
+    }
   }catch(err){
     marcarPaso('❌ No se pudo leer el formulario: ' + err.message);
     mostrarBannerForm('No se pudo leer el formulario. Detalle: ' + err.message + ' — Recarga la página e inténtalo de nuevo.');
@@ -1171,7 +1268,23 @@ function enviarExpediente(){
 
 /* Aplica un expediente recibido (ya validado por el servidor) al registro en memoria.
    Lo ejecuta Operaciones al procesar el buzón; NO guarda: quien lo llama hace saveMeta(). */
+const normTxt = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+function aplicarEquipoAMeta(f){
+  meta.personal = meta.personal || [];
+  const nombre = `${f.nombre} ${f.apellidos}`.trim();
+  let p = meta.personal.find(x => normTxt(x.nombre) === normTxt(nombre));
+  if(!p){ p = { id: uid(), activo: true }; meta.personal.push(p); }
+  Object.assign(p, {
+    nombre, puesto: f.puesto || p.puesto || '', area: f.area || p.area || '', telefono: f.telefono || p.telefono || '',
+    sangre: f.sangre, alergias: f.alergias, contactoEmergencia: f.tutor1,
+    curp: f.curp, fechaNacimiento: f.fechaNacimiento, domicilio: f.domicilio, condiciones: f.condiciones,
+    medicamentos: f.medicamentos, cuentaSeguro: f.cuentaSeguro, aseguradora: f.aseguradora, numeroSeguro: f.numeroSeguro,
+    contacto2: f.tutor2, autorizacionTraslado: f.autorizacionTraslado,
+    expedienteRecibido: f._recibido || new Date().toISOString()
+  });
+}
 function aplicarExpedienteAMeta(formData){
+  if(formData.tipo === 'equipo'){ aplicarEquipoAMeta(formData); return; }
   if(!meta.salones.length) meta = seedMeta();
   const norm = s => (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
 
@@ -1249,6 +1362,8 @@ async function procesarBuzon(){
 function resetForm(){
   document.getElementById('emergencyForm').reset();
   document.getElementById('successScreen').classList.remove('active');
+  document.getElementById('finScreen').classList.remove('active');
+  aplicarModoEquipo();
   document.getElementById('form-container').style.display = 'block';
   document.getElementById('form-container').classList.remove('active');
   document.getElementById('coverScreen').classList.remove('hidden');
@@ -1308,7 +1423,7 @@ function exitOps(){
   document.getElementById('parent-app').style.display = 'flex';
   document.getElementById('coverScreen').classList.remove('hidden');
   document.getElementById('form-container').classList.remove('active');
-  if(location.hash === '#operaciones') history.replaceState(null,'',location.pathname+location.search);
+  if(location.hash === '#operaciones' || location.hash === '#configuracion') history.replaceState(null,'',location.pathname+location.search);
 }
 // La sesión caducó (o el servidor la rechazó): volver a pedir contraseña, sin perder lo ya guardado.
 window.addEventListener('koru-sesion-expirada', ()=>{
@@ -1319,11 +1434,16 @@ window.addEventListener('koru-sesion-expirada', ()=>{
 });
 /* El acceso a Operaciones no se muestra a los papás: se entra con  …/#operaciones  */
 function revisarAccesoOperaciones(){
-  if(location.hash !== '#operaciones') return;
+  if(location.hash !== '#operaciones' && location.hash !== '#configuracion') return;
   if(document.getElementById('ops-app').style.display === 'block') return;
   if(window.koru && window.koru.haySesion()){ enterOps(); } else { openGate(); }
 }
-window.addEventListener('hashchange', revisarAccesoOperaciones);
+window.addEventListener('hashchange', ()=>{
+  if(location.hash === '#configuracion' && document.getElementById('ops-app').style.display === 'block' && registroCargado){
+    state.tab = 'config'; prepararConfig(); render(); return;
+  }
+  revisarAccesoOperaciones();
+});
 document.getElementById('gate-pin')?.addEventListener('keyup', e => { if(e.key==='Enter') checkGate(); });
 
 /* ============================================================
@@ -1339,7 +1459,7 @@ async function loadAll(){
   registroCargado = false;
   cont.innerHTML = `<div class="loading">Cargando registro…</div>`;
   if(!window.storage || !window.koru){
-    cont.innerHTML = `<div class="panel"><p class="empty">⚠️ No se encontró el almacenamiento. Verifica que config.js y storage-shim.js estén publicados junto a index.html.</p></div>`;
+    cont.innerHTML = `<div class="panel"><p class="empty">⚠️ No se encontró el almacenamiento. Recarga la página; si sigue igual, revisa que index.html se haya publicado completo.</p></div>`;
     return;
   }
   // Si la lectura FALLA (red, sesión, servidor) se muestra el error y se detiene: jamás se parte de un
@@ -1364,7 +1484,9 @@ async function loadAll(){
   if(/^\s*2025\s*-\s*2026\s*$/.test(meta.config.ciclo||'')) meta.config.ciclo = '2026 - 2027';
   if(!state.salonId || !meta.salones.find(s=>s.id===state.salonId)) state.salonId = meta.salones[0]?.id || null;
   registroCargado = true;
+  if(location.hash === '#configuracion'){ state.tab = 'config'; prepararConfig(); }
   render();
+  publicarGrupos();   // deja disponible para el formulario de los papás la lista de grupos vigente
   iniciarActualizacionPeriodica();
   await procesarBuzon();
   sugerirRespaldoSiHaceFalta();
@@ -1377,6 +1499,7 @@ function migrarEsquema(m){
   if(!m.schemaVersion) m.schemaVersion = 1;
   if(!m.personal) m.personal = [];
   if(!m.procesados) m.procesados = [];
+  if(!Array.isArray(m.grupos) || !m.grupos.length) m.grupos = GRUPOS_DEFECTO.map(g=>Object.assign({},g));
   m.alumnos.forEach(a=>{ if(a.activo === undefined) a.activo = true; });
 }
 
@@ -1573,6 +1696,7 @@ function render(){
       ${state.tab==='resumen' ? resumenTabHtml() : ''}
       ${state.tab==='equipo' ? equipoTabHtml() : ''}
       ${state.tab==='ajustes' ? ajustesTabHtml() : ''}
+      ${state.tab==='config' ? configTabHtml() : ''}
       ${state.modal ? modalHtml() : ''}
       ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
     `;
@@ -1605,9 +1729,111 @@ function topbarHtml(){
         <button data-tab="equipo" class="${state.tab==='equipo'?'active':''}">Equipo</button>
         <button data-tab="ajustes" class="${state.tab==='ajustes'?'active':''}">Credencial</button>
       </nav>
+      <button class="cfg-quick ${state.tab==='config'?'active':''}" data-tab="config" title="Grupos del formulario, Google Sheets y ajustes">⚙️ Configuración</button>
       <button class="exit-ops" onclick="exitOps()">Salir</button>
     </div>
   </div>`;
+}
+
+/* ================= CONFIGURACIÓN (Operaciones) ================= */
+function prepararConfig(){
+  state.gruposDraft = (meta.grupos||GRUPOS_DEFECTO).map(g=>({ nombre:g.nombre, detalle:g.detalle||'', equipo:!!g.equipo, orig:g.nombre }));
+  if(window.KORU_MODO === 'nube' && !state.hojaUrl && !state.hojaCargando){
+    state.hojaCargando = true;
+    window.koru.hojaInfo().then(d=>{ state.hojaUrl = d.url; state.hojaError = ''; })
+      .catch(e=>{ state.hojaError = (e && e.message ? e.message : String(e)).replace(/^Storage \w+ failed: /,''); })
+      .finally(()=>{ state.hojaCargando = false; if(state.tab==='config' && registroCargado) render(); });
+  }
+}
+function configTabHtml(){
+  if(!state.gruposDraft) prepararConfig();
+  const filas = state.gruposDraft.map((g,i)=>`
+    <div class="gr-row">
+      <input type="text" data-gr="nombre" data-i="${i}" value="${escapeHtml(g.nombre)}" placeholder="Nombre del grupo" maxlength="60">
+      <input type="text" data-gr="detalle" data-i="${i}" value="${escapeHtml(g.detalle)}" placeholder="Detalle (ej. 3 a 6 años)" maxlength="60">
+      <label class="eq" title="Los grupos de equipo llenan el formulario del personal y se guardan en la pestaña Equipo"><input type="checkbox" data-gr="equipo" data-i="${i}" ${g.equipo?'checked':''}> Es del equipo</label>
+      <span style="display:flex; gap:4px;">
+        <button class="icon-btn" data-action="gr-subir" data-i="${i}" title="Subir" ${i===0?'disabled':''}>↑</button>
+        <button class="icon-btn" data-action="gr-bajar" data-i="${i}" title="Bajar" ${i===state.gruposDraft.length-1?'disabled':''}>↓</button>
+        <button class="icon-btn" data-action="gr-quitar" data-i="${i}" title="Quitar del formulario">✕</button>
+      </span>
+    </div>`).join('');
+  const hoja = window.KORU_MODO !== 'nube'
+    ? `<p class="empty" style="padding:0">Modo de demostración: Google Sheets se activa al configurar <code>apiUrl</code> en index.html.</p>`
+    : state.hojaUrl
+      ? `<div class="cfg-shortcuts"><a class="pill solid" href="${escapeHtml(state.hojaUrl)}" target="_blank" rel="noopener">📊 Abrir hoja de Google Sheets</a>
+          <button class="pill ghost" data-action="volcar-hoja" ${state.volcando?'disabled':''}>${state.volcando?'Enviando…':'⬆️ Enviar registro completo (Alumnos y Equipo) a la hoja'}</button></div>`
+      : state.hojaError
+        ? `<p class="empty" style="padding:0">⚠️ No se pudo preparar la hoja: ${escapeHtml(state.hojaError)}. Ejecuta <code>autorizar</code> en Apps Script (autoriza Google Sheets) y vuelve a intentar.</p>`
+        : `<p class="empty" style="padding:0">Preparando la hoja…</p>`;
+  return `
+  <div class="panel cfg-card">
+    <h2 style="margin:0 0 4px">Grupos del formulario</h2>
+    <p class="empty" style="padding:0 0 12px">Estas opciones aparecen en el formulario de los papás. Marca «Es del equipo» en <b>Equipo Koru</b> (o el que uses para el personal): el formulario se adapta y esas respuestas van a la pestaña Equipo. Quitar un grupo del formulario no borra a los alumnos que ya tiene.</p>
+    ${filas}
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+      <button class="pill ghost" data-action="gr-agregar">+ Agregar grupo</button>
+      <button class="pill solid" data-action="gr-guardar">Guardar grupos</button>
+    </div>
+  </div>
+  <div class="panel cfg-card">
+    <h2 style="margin:0 0 4px">Google Sheets</h2>
+    <p class="empty" style="padding:0 0 10px">Cada expediente que se envía queda además como una fila en la hoja «Expedientes».</p>
+    ${hoja}
+  </div>
+  <div class="panel cfg-card">
+    <h2 style="margin:0 0 4px">Accesos rápidos</h2>
+    <div class="cfg-shortcuts">
+      <button class="pill ghost" data-tab="ajustes">🪪 Datos de la credencial (ciclo, directora, domicilio)</button>
+      <button class="pill ghost" data-tab="equipo">👥 Equipo</button>
+      <button class="pill ghost" data-tab="salones">🏫 Salones</button>
+    </div>
+    <p class="empty" style="padding:10px 0 0">Tip: guarda el enlace <code>…/#configuracion</code> para entrar directo a esta pantalla.</p>
+  </div>`;
+}
+async function publicarGrupos(){
+  try{ await window.storage.set('koru-cfg::grupos', JSON.stringify(meta.grupos||GRUPOS_DEFECTO), SHARED); }
+  catch(e){ if(!(e && e.code==='SESION')) console.error('No se pudo publicar la lista de grupos:', e); }
+}
+async function guardarGrupos(){
+  const d = state.gruposDraft || [];
+  const nombres = d.map(g=>g.nombre.trim());
+  if(!nombres.length || nombres.some(n=>!n)){ avisoGlobal('Cada grupo necesita un nombre.'); return; }
+  if(new Set(nombres.map(normTxt)).size !== nombres.length){ avisoGlobal('Hay dos grupos con el mismo nombre.'); return; }
+  d.forEach(g=>{
+    if(g.equipo) return;
+    const nombre = g.nombre.trim();
+    if(g.orig && normTxt(g.orig) !== normTxt(nombre)){
+      const sa = meta.salones.find(x=>normTxt(x.nombre)===normTxt(g.orig));
+      if(sa && !meta.salones.some(x=>normTxt(x.nombre)===normTxt(nombre))) sa.nombre = nombre;
+    }
+    if(!meta.salones.some(x=>normTxt(x.nombre)===normTxt(nombre))) meta.salones.push({ id: uid(), nombre });
+  });
+  meta.grupos = d.map(g=>({ nombre:g.nombre.trim(), detalle:(g.detalle||'').trim(), equipo:!!g.equipo }));
+  await saveMeta();
+  await publicarGrupos();
+  prepararConfig();
+  showToast('Grupos guardados. Ya aparecen en el formulario.');
+  render();
+}
+async function volcarAHoja(){
+  state.volcando = true; render();
+  try{
+    const sal = id => (meta.salones.find(x=>x.id===id)||{}).nombre || '';
+    const al = meta.alumnos;
+    const tabs = {
+      Alumnos: { cols:['Grupo','Nombre','CURP','Fecha de nacimiento','Tipo de sangre','Alergias','Condiciones','Medicamentos','Aseguradora','Núm. seguro','Tutor 1','Tel. tutor 1','Tutor 2','Domicilio','Autorizados para recoger','Autoriza traslado','Hermanos','Activo','Expediente recibido'],
+        rows: al.map(a=>[sal(a.salonId),a.nombre,a.curp,a.fechaNacimiento,a.sangre,a.alergias,a.condiciones,a.medicamentos,a.aseguradora,a.numeroSeguro,a.tutor1,a.tutor1Tel,a.tutor2,a.domicilio,a.autorizadosRetiro,a.autorizacionTraslado,a.hermanos,a.activo===false?'No':'Sí',a.expedienteRecibido]) },
+      Equipo: { cols:['Nombre','Puesto','Área','Teléfono','CURP','Fecha de nacimiento','Tipo de sangre','Alergias','Condiciones','Medicamentos','Aseguradora','Núm. seguro','Contacto de emergencia','Domicilio','Núm. empleado','Fecha de ingreso','Activo'],
+        rows: (meta.personal||[]).map(p=>[p.nombre,p.puesto,p.area,p.telefono,p.curp,p.fechaNacimiento,p.sangre,p.alergias,p.condiciones,p.medicamentos,p.aseguradora,p.numeroSeguro,p.contactoEmergencia,p.domicilio,p.numeroEmpleado,p.fechaIngreso,p.activo===false?'No':'Sí']) }
+    };
+    const clean = t => ({ cols:t.cols, rows:t.rows.map(r=>r.map(v=>v===undefined||v===null?'':String(v))) });
+    const r = await window.koru.hojaVolcar({ Alumnos:clean(tabs.Alumnos), Equipo:clean(tabs.Equipo) });
+    state.hojaUrl = r.url || state.hojaUrl;
+    showToast(`Hoja actualizada (${r.filas} filas).`);
+  }catch(e){
+    avisoGlobal('No se pudo enviar a Google Sheets: ' + (e && e.message ? e.message.replace(/^Storage \w+ failed: /,'') : e));
+  }finally{ state.volcando = false; render(); }
 }
 
 function salonesTabHtml(){
@@ -2030,6 +2256,14 @@ function fichaPersonalHtml(id){
       <div class="exp-item"><dt>Tipo de sangre</dt><dd>${escapeHtml(p.sangre||'—')}</dd></div>
       <div class="exp-item"><dt>Alergias</dt><dd>${escapeHtml(p.alergias||'—')}</dd></div>
       <div class="exp-item"><dt>Contacto de emergencia</dt><dd>${escapeHtml(p.contactoEmergencia||'—')}</dd></div>
+      ${p.expedienteRecibido ? `
+      <div class="exp-item"><dt>CURP</dt><dd>${escapeHtml(p.curp||'—')}</dd></div>
+      <div class="exp-item"><dt>Fecha de nacimiento</dt><dd>${escapeHtml(p.fechaNacimiento||'—')}</dd></div>
+      <div class="exp-item"><dt>Domicilio</dt><dd>${escapeHtml(p.domicilio||'—')}</dd></div>
+      <div class="exp-item"><dt>Condiciones médicas</dt><dd>${escapeHtml(p.condiciones||'—')}</dd></div>
+      <div class="exp-item"><dt>Medicamentos</dt><dd>${escapeHtml(p.medicamentos||'—')}</dd></div>
+      <div class="exp-item"><dt>Seguro</dt><dd>${escapeHtml([p.cuentaSeguro,p.aseguradora,p.numeroSeguro].filter(Boolean).join(' · ')||'—')}</dd></div>
+      <div class="exp-item"><dt>Contacto 2</dt><dd>${escapeHtml(p.contacto2||'—')}</dd></div>` : ''}
     </dl>
   </div>`;
 }
@@ -2434,7 +2668,7 @@ function escapeHtml(str){
 }
 
 function attachHandlers(){
-  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.tab; state.fichaId=null; state.personalFichaId=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.tab; state.fichaId=null; state.personalFichaId=null; if(state.tab==='config') prepararConfig(); render(); });
   document.querySelectorAll('[data-select-salon]').forEach(b=>b.onclick=()=>{ state.salonId=b.dataset.selectSalon; state.fichaId=null; render(); });
 
   const byAction = sel => document.querySelectorAll(sel);
@@ -2709,6 +2943,17 @@ function attachHandlers(){
     await saveMeta();
     state.modal = null; render();
   });
+  /* ---- Configuración ---- */
+  document.querySelectorAll('[data-gr]').forEach(inp=>{
+    const i = Number(inp.dataset.i), campo = inp.dataset.gr;
+    inp.addEventListener(campo==='equipo'?'change':'input', ()=>{ if(state.gruposDraft && state.gruposDraft[i]) state.gruposDraft[i][campo] = campo==='equipo' ? inp.checked : inp.value; });
+  });
+  byAction('[data-action="gr-agregar"]').forEach(b=>b.onclick=()=>{ state.gruposDraft.push({nombre:'',detalle:'',equipo:false,orig:''}); render(); });
+  byAction('[data-action="gr-quitar"]').forEach(b=>b.onclick=()=>{ state.gruposDraft.splice(Number(b.dataset.i),1); render(); });
+  byAction('[data-action="gr-subir"]').forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.i), d=state.gruposDraft; if(i>0){ [d[i-1],d[i]]=[d[i],d[i-1]]; render(); } });
+  byAction('[data-action="gr-bajar"]').forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.i), d=state.gruposDraft; if(i<d.length-1){ [d[i+1],d[i]]=[d[i],d[i+1]]; render(); } });
+  byAction('[data-action="gr-guardar"]').forEach(b=>b.onclick=()=>guardarGrupos());
+  byAction('[data-action="volcar-hoja"]').forEach(b=>b.onclick=()=>volcarAHoja());
   byAction('[data-action="ver-ficha-personal"]').forEach(b=>b.onclick=()=>{ state.personalFichaId = b.dataset.id; render(); });
   byAction('[data-action="back-to-equipo"]').forEach(b=>b.onclick=()=>{ state.personalFichaId = null; render(); });
   byAction('[data-action="delete-personal"]').forEach(b=>b.onclick=async ()=>{
