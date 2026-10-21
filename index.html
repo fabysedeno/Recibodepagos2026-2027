@@ -13,11 +13,11 @@
 //  parentKey : (opcional) clave "anti-bots" del enlace de los papás. Debe ser igual a la
 //              propiedad PARENT_KEY de Apps Script. No es secreta: solo frena envíos automáticos.
 //
-//  La contraseña de Operaciones NO va aquí: vive solo en Apps Script (OPS_PASSWORD).
+//  La contraseña de Operaciones NO va aquí: vive solo en Apps Script (inicial 300797; se cambia en Configuración).
 //
 //  Si apiUrl se deja vacío, la app corre en "modo de demostración" (solo en este navegador).
 window.KORU_CONFIG = {
-  apiUrl: 'https://script.google.com/macros/s/AKfycbxdbVv269WLyikLWoQJaUsWceLhtqGbjmqcCbP0PGbdOGA1ev5eZJTe77R3DO5JDMu5fA/exec',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbzla6OZB2I0dmDGdRF_13Fx04wcKwoW1C6l-Zs2FE77pPkXCVJAdy6GERU4e5WI0GYulg/exec',
   parentKey: ''
 };
 
@@ -33,7 +33,7 @@ window.KORU_CONFIG = {
  *  window.storage  mismo contrato que tenía la app (get/set/delete) + cambio(clave); requiere sesión.
  *
  *  Con config.js → apiUrl: los datos viven en Google Drive (compartidos entre dispositivos).
- *  Sin apiUrl: "modo local de demostración" (localStorage del navegador; contraseña KORU2026).
+ *  Sin apiUrl: "modo local de demostración" (localStorage del navegador; contraseña inicial 300797).
  */
 (function () {
   'use strict';
@@ -120,7 +120,12 @@ window.KORU_CONFIG = {
       try { return d.value ? JSON.parse(d.value) : null; } catch (e) { return null; }
     },
     async hojaInfo() { return conSesion({ op: 'hoja_info' }, { timeout: 60000 }); },
-    async hojaVolcar(tabs) { return conSesion({ op: 'hoja_volcar', tabs }, { timeout: 120000 }); }
+    async hojaVolcar(tabs) { return conSesion({ op: 'hoja_volcar', tabs }, { timeout: 120000 }); },
+    async hojaConfigurar(hoja) { return conSesion({ op: 'hoja_configurar', hoja: String(hoja || '') }, { timeout: 60000 }); },
+    async cambiarClave(actual, nueva) {
+      const d = await conSesion({ op: 'cambiar_clave', actual: String(actual || ''), nueva: String(nueva || '') }, { timeout: 45000 });
+      guardarSesion(d.session);   // la sesión anterior deja de valer: se continúa con la nueva
+    }
   };
   const almacenNube = {
     async get(key) {
@@ -155,13 +160,14 @@ window.KORU_CONFIG = {
   /* ================================ MODO LOCAL (demo) ================================ */
   const LS = 'koru:';
   let sesionLocal = false;
+  const claveLocal = () => { try { return localStorage.getItem(LS + 'ops-clave') || '300797'; } catch (e) { return '300797'; } };
   const local = {
     async enviarExpediente(datos) {
       const id = 'inbox-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
       localStorage.setItem(LS + id, JSON.stringify({ id, recibido: new Date().toISOString(), data: datos }));
     },
     async login(password) {
-      if (String(password || '').trim().toUpperCase() !== 'KORU2026') { const e = new Error('Contraseña incorrecta'); e.code = 'CLAVE'; throw e; }
+      if (String(password || '') !== claveLocal()) { const e = new Error('Contraseña incorrecta'); e.code = 'CLAVE'; throw e; }
       sesionLocal = true;
     },
     logout() { sesionLocal = false; },
@@ -177,7 +183,13 @@ window.KORU_CONFIG = {
     async buzonConfirmar(ids) { (ids || []).forEach(id => localStorage.removeItem(LS + id)); },
     async grupos() { try { const v = localStorage.getItem(LS + 'koru-cfg::grupos'); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
     async hojaInfo() { const e = new Error('Google Sheets solo está disponible con el servidor de Apps Script (modo demostración activo).'); throw e; },
-    async hojaVolcar() { const e = new Error('Google Sheets solo está disponible con el servidor de Apps Script (modo demostración activo).'); throw e; }
+    async hojaVolcar() { const e = new Error('Google Sheets solo está disponible con el servidor de Apps Script (modo demostración activo).'); throw e; },
+    async hojaConfigurar() { const e = new Error('Google Sheets solo está disponible con el servidor de Apps Script (modo demostración activo).'); throw e; },
+    async cambiarClave(actual, nueva) {
+      if (String(actual) !== claveLocal()) { const e = new Error('La contraseña actual no es correcta'); e.code = 'CLAVE'; throw e; }
+      if (String(nueva).length < 6) { const e = new Error('La contraseña nueva debe tener al menos 6 caracteres'); throw e; }
+      localStorage.setItem(LS + 'ops-clave', String(nueva));
+    }
   };
   const almacenLocal = {
     async get(key) { const v = localStorage.getItem(LS + key); return v === null ? null : { key, value: v }; },
@@ -193,7 +205,7 @@ window.KORU_CONFIG = {
   if (!remoto) {
     document.addEventListener('DOMContentLoaded', function () {
       const b = document.createElement('div');
-      b.textContent = 'Modo de demostración: los datos se guardan solo en este navegador. Configura config.js para usar Google Drive.';
+      b.textContent = 'Modo de demostración: los datos se guardan solo en este navegador. Configura apiUrl en index.html para usar Google Drive.';
       b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#fff4d6;color:#6b4e00;font:12px/1.3 sans-serif;padding:6px 10px;text-align:center;border-top:1px solid #e6c97a';
       document.body.appendChild(b);
     });
@@ -1349,6 +1361,7 @@ async function procesarBuzon(){
       if(!meta.salones.find(s=>s.id===state.salonId)) state.salonId = meta.salones[0]?.id || null;
       render();
       showToast(nuevos === 1 ? 'Llegó 1 expediente nuevo.' : `Llegaron ${nuevos} expedientes nuevos.`);
+      if(window.KORU_MODO === 'nube') volcarAHoja(true);   // mantiene al día las pestañas Alumnos y Equipo
     }
     return nuevos;
   }catch(e){
@@ -1740,8 +1753,12 @@ function prepararConfig(){
   state.gruposDraft = (meta.grupos||GRUPOS_DEFECTO).map(g=>({ nombre:g.nombre, detalle:g.detalle||'', equipo:!!g.equipo, orig:g.nombre }));
   if(window.KORU_MODO === 'nube' && !state.hojaUrl && !state.hojaCargando){
     state.hojaCargando = true;
-    window.koru.hojaInfo().then(d=>{ state.hojaUrl = d.url; state.hojaError = ''; })
-      .catch(e=>{ state.hojaError = (e && e.message ? e.message : String(e)).replace(/^Storage \w+ failed: /,''); })
+    window.koru.hojaInfo().then(d=>{ state.hojaUrl = d.url; state.hojaError = ''; state.hojaInfo = d; })
+      .catch(e=>{
+        let m = (e && e.message ? e.message : String(e)).replace(/^Storage \w+ failed: /,'');
+        if(/Operaci[oó]n desconocida/i.test(m)) m = 'Apps Script tiene una versión ANTERIOR del código. Pega el Code.gs nuevo, guarda y crea una NUEVA VERSIÓN de la implementación (Implementar → Administrar implementaciones → lápiz → Nueva versión)';
+        state.hojaError = m;
+      })
       .finally(()=>{ state.hojaCargando = false; if(state.tab==='config' && registroCargado) render(); });
   }
 }
@@ -1761,10 +1778,15 @@ function configTabHtml(){
   const hoja = window.KORU_MODO !== 'nube'
     ? `<p class="empty" style="padding:0">Modo de demostración: Google Sheets se activa al configurar <code>apiUrl</code> en index.html.</p>`
     : state.hojaUrl
-      ? `<div class="cfg-shortcuts"><a class="pill solid" href="${escapeHtml(state.hojaUrl)}" target="_blank" rel="noopener">📊 Abrir hoja de Google Sheets</a>
-          <button class="pill ghost" data-action="volcar-hoja" ${state.volcando?'disabled':''}>${state.volcando?'Enviando…':'⬆️ Enviar registro completo (Alumnos y Equipo) a la hoja'}</button></div>`
+      ? `${(state.hojaInfo && state.hojaInfo.ultimoError) ? `<p class="empty" style="padding:0 0 10px; color:#9a3412">⚠️ El último envío a la hoja falló: <b>${escapeHtml(state.hojaInfo.ultimoError)}</b>. En Apps Script ejecuta <code>autorizar</code>, acepta los permisos y crea una nueva versión de la implementación. Los expedientes no se pierden: ${state.hojaInfo.pendientes?`hay <b>${state.hojaInfo.pendientes}</b> en espera y `:''}se reintentan solos al abrir Operaciones.</p>` : `<p class="empty" style="padding:0 0 10px">✅ Conexión con Google Sheets lista${state.hojaInfo&&state.hojaInfo.version?' (servidor v'+escapeHtml(state.hojaInfo.version)+')':''}.</p>`}
+         <div class="cfg-shortcuts"><a class="pill solid" href="${escapeHtml(state.hojaUrl)}" target="_blank" rel="noopener">📊 Abrir hoja de Google Sheets</a>
+          <button class="pill ghost" data-action="volcar-hoja" ${state.volcando?'disabled':''}>${state.volcando?'Enviando…':'⬆️ Enviar registro completo (Alumnos y Equipo) a la hoja'}</button></div>
+         <label class="cfg-label">¿Prefieres usar una hoja tuya? Pega aquí su URL (déjalo vacío para volver a la hoja automática)</label>
+         <div style="display:flex; gap:8px; flex-wrap:wrap;"><input type="text" class="cfg-input" id="hoja-propia" style="flex:1; min-width:220px" placeholder="https://docs.google.com/spreadsheets/d/…" value="">
+         <button class="pill ghost" data-action="usar-hoja">Usar esta hoja</button></div>`
       : state.hojaError
-        ? `<p class="empty" style="padding:0">⚠️ No se pudo preparar la hoja: ${escapeHtml(state.hojaError)}. Ejecuta <code>autorizar</code> en Apps Script (autoriza Google Sheets) y vuelve a intentar.</p>`
+        ? `<p class="empty" style="padding:0">⚠️ No se pudo preparar la hoja: <b>${escapeHtml(state.hojaError)}</b>.<br>Qué hacer: (1) pega el Code.gs más reciente en Apps Script, (2) ejecuta la función <code>autorizar</code> y acepta TODOS los permisos (Drive y Hojas de cálculo), (3) Implementar → Administrar implementaciones → lápiz → Versión «Nueva versión» → Implementar, (4) recarga esta página.</p>
+        <button class="pill ghost" style="margin-top:8px" data-action="reintentar-hoja">Reintentar</button>`
         : `<p class="empty" style="padding:0">Preparando la hoja…</p>`;
   return `
   <div class="panel cfg-card">
@@ -1780,6 +1802,16 @@ function configTabHtml(){
     <h2 style="margin:0 0 4px">Google Sheets</h2>
     <p class="empty" style="padding:0 0 10px">Cada expediente que se envía queda además como una fila en la hoja «Expedientes».</p>
     ${hoja}
+  </div>
+  <div class="panel cfg-card">
+    <h2 style="margin:0 0 4px">Contraseña de Operaciones</h2>
+    <p class="empty" style="padding:0 0 10px">Al cambiarla, las demás sesiones abiertas se cierran. Mínimo 6 caracteres. Si la olvidas: en Apps Script ejecuta <code>restablecerClave</code> (vuelve a la inicial).</p>
+    <div style="display:grid; gap:8px; max-width:340px;">
+      <input type="password" class="cfg-input" id="clave-actual" placeholder="Contraseña actual" autocomplete="current-password">
+      <input type="password" class="cfg-input" id="clave-nueva" placeholder="Contraseña nueva" autocomplete="new-password">
+      <input type="password" class="cfg-input" id="clave-nueva2" placeholder="Repite la contraseña nueva" autocomplete="new-password">
+      <button class="pill solid" data-action="cambiar-clave" style="justify-self:start">Cambiar contraseña</button>
+    </div>
   </div>
   <div class="panel cfg-card">
     <h2 style="margin:0 0 4px">Accesos rápidos</h2>
@@ -1816,8 +1848,9 @@ async function guardarGrupos(){
   showToast('Grupos guardados. Ya aparecen en el formulario.');
   render();
 }
-async function volcarAHoja(){
-  state.volcando = true; render();
+async function volcarAHoja(silencioso){
+  if(state.volcando) return;
+  state.volcando = true; if(!silencioso) render();
   try{
     const sal = id => (meta.salones.find(x=>x.id===id)||{}).nombre || '';
     const al = meta.alumnos;
@@ -1830,10 +1863,10 @@ async function volcarAHoja(){
     const clean = t => ({ cols:t.cols, rows:t.rows.map(r=>r.map(v=>v===undefined||v===null?'':String(v))) });
     const r = await window.koru.hojaVolcar({ Alumnos:clean(tabs.Alumnos), Equipo:clean(tabs.Equipo) });
     state.hojaUrl = r.url || state.hojaUrl;
-    showToast(`Hoja actualizada (${r.filas} filas).`);
+    if(!silencioso) showToast(`Hoja actualizada (${r.filas} filas).`);
   }catch(e){
-    avisoGlobal('No se pudo enviar a Google Sheets: ' + (e && e.message ? e.message.replace(/^Storage \w+ failed: /,'') : e));
-  }finally{ state.volcando = false; render(); }
+    if(!silencioso) avisoGlobal('No se pudo enviar a Google Sheets: ' + (e && e.message ? e.message.replace(/^Storage \w+ failed: /,'') : e));
+  }finally{ state.volcando = false; if(registroCargado && !silencioso) render(); }
 }
 
 function salonesTabHtml(){
@@ -2953,7 +2986,24 @@ function attachHandlers(){
   byAction('[data-action="gr-subir"]').forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.i), d=state.gruposDraft; if(i>0){ [d[i-1],d[i]]=[d[i],d[i-1]]; render(); } });
   byAction('[data-action="gr-bajar"]').forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.i), d=state.gruposDraft; if(i<d.length-1){ [d[i+1],d[i]]=[d[i],d[i+1]]; render(); } });
   byAction('[data-action="gr-guardar"]').forEach(b=>b.onclick=()=>guardarGrupos());
+  byAction('[data-action="cambiar-clave"]').forEach(b=>b.onclick=async ()=>{
+    const a = document.getElementById('clave-actual').value, n = document.getElementById('clave-nueva').value, n2 = document.getElementById('clave-nueva2').value;
+    if(!a || !n){ avisoGlobal('Escribe la contraseña actual y la nueva.'); return; }
+    if(n !== n2){ avisoGlobal('La contraseña nueva y su repetición no coinciden.'); return; }
+    try{
+      await window.koru.cambiarClave(a, n);
+      ['clave-actual','clave-nueva','clave-nueva2'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
+      showToast('Contraseña cambiada. Úsala la próxima vez que entres.');
+    }catch(e){ avisoGlobal('No se cambió la contraseña: ' + (e && e.message ? e.message.replace(/^Storage \w+ failed: /,'') : e)); }
+  });
   byAction('[data-action="volcar-hoja"]').forEach(b=>b.onclick=()=>volcarAHoja());
+  byAction('[data-action="reintentar-hoja"]').forEach(b=>b.onclick=()=>{ state.hojaError=''; state.hojaUrl=''; state.hojaCargando=false; prepararConfig(); render(); });
+  byAction('[data-action="usar-hoja"]').forEach(b=>b.onclick=async ()=>{
+    try{
+      const d = await window.koru.hojaConfigurar(document.getElementById('hoja-propia').value);
+      state.hojaUrl = d.url; state.hojaInfo = d; showToast('Hoja configurada. Los nuevos expedientes llegarán ahí.'); render();
+    }catch(e){ avisoGlobal('No se pudo usar esa hoja: ' + (e && e.message ? e.message.replace(/^Storage \w+ failed: /,'') : e)); }
+  });
   byAction('[data-action="ver-ficha-personal"]').forEach(b=>b.onclick=()=>{ state.personalFichaId = b.dataset.id; render(); });
   byAction('[data-action="back-to-equipo"]').forEach(b=>b.onclick=()=>{ state.personalFichaId = null; render(); });
   byAction('[data-action="delete-personal"]').forEach(b=>b.onclick=async ()=>{
